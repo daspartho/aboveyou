@@ -5,16 +5,17 @@ const API = 'https://ensemble-above.vercel.app';
 const POLL = 10_000;
 const $ = id => document.getElementById(id), rad = d => d * Math.PI / 180;
 const canvas = $('c'), g = canvas.getContext('2d');
-const ink = a => `rgba(130,255,170,${a})`;
+const ink = a => `rgba(255,255,255,${a})`;
 
 let home = null, planes = new Map(), ctx = null, music = null, picked = null, muted = false;
-let W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null;
+let tall = false, W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null;
 function resize() {
-  const d = devicePixelRatio || 1; W = innerWidth; H = innerHeight;
-  const up = W / H < 1.2;                // on tall screens the note sits under the radar, on wide ones beside it
-  S = up ? Math.min(W * 0.41, (H - 340) / 2.2) : Math.min(H * 0.44, (W - 385) / 2.25);
-  CX = up ? W / 2 : Math.max(W / 2, 325 + S * 1.1);
-  CY = up ? 100 + S * 1.1 : H / 2;
+  const d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
+  tall = W / H < 1.2;                    // on tall screens the note sits under the radar and scrolls, on wide ones beside it
+  S = tall ? Math.min(W * 0.43, (H * 0.68 - 74) / 2.3) : Math.min(H * 0.44, (W - 385) / 2.25);
+  CX = tall ? W / 2 : Math.max(W / 2, 325 + S * 1.1);
+  CY = tall ? 44 + S * 1.1 : H / 2;
+  document.documentElement.style.setProperty('--below', `${CY + S * 1.2 + 34 | 0}px`);
   canvas.width = W * d | 0; canvas.height = H * d | 0; g.setTransform(d, 0, 0, d, 0, 0);
 }
 addEventListener('resize', resize); resize();
@@ -86,7 +87,7 @@ const DIAL_FROM = 45, DIAL_SPAN = 90;   // from north-east round to south-east
 const dialAz = () => DIAL_FROM + (play.beats - 4) / 92 * DIAL_SPAN;
 // The speed lever stands beside the radar, or lies under it on tall screens. Push towards the word for faster.
 const SLOWEST = 120, FASTEST = 2;
-const track = () => W / H < 1.2 ? [CX - S * 0.55, CY + S * 1.2, CX + S * 0.55, CY + S * 1.2] : [CX + S * 1.24, CY + S * 0.5, CX + S * 1.24, CY - S * 0.5];
+const track = () => tall ? [CX - S * 0.6, CY + S * 1.2, CX + S * 0.6, CY + S * 1.2] : [CX + S * 1.24, CY + S * 0.5, CX + S * 1.24, CY - S * 0.5];
 function lever() {
   const [ax, ay, bx, by] = track(), u = Math.log(play.turn / SLOWEST) / Math.log(FASTEST / SLOWEST), up = ax === bx;
   const along = v => [ax + (bx - ax) * v, ay + (by - ay) * v];
@@ -107,10 +108,11 @@ function rim() {
     g.moveTo(a, b); g.lineTo(c, d);
   }
   g.stroke();
-  const [x, y] = polar(dialAz(), 1), room = x + 72 < W;   // on narrow screens the label sits above the handle
+  const [x, y] = polar(dialAz(), 1), room = x + 72 < W, off = y - CY;
   g.fillStyle = ink(dialing ? 1 : 0.7); g.beginPath(); g.arc(x, y, 4, 0, 7); g.fill();
   g.fillStyle = ink(0.6); g.textAlign = room ? 'left' : 'right';
-  g.fillText(`${play.beats} beats`, room ? x + (Math.abs(dialAz() - 90) < 8 ? 30 : 10) : x + 6, room ? y + 1 : y - 12);   // clears the e
+  // Beside the handle, or on narrow screens in the corner outside the circle, level with it as far as the rim allows.
+  g.fillText(`${play.beats} beats`, room ? x + (Math.abs(dialAz() - 90) < 8 ? 30 : 10) : W - 10, room ? y + 1 : CY + Math.max(Math.abs(off), S * 0.64) * (off < 0 ? -1 : 1));
   g.textAlign = 'left';
 }
 
@@ -126,7 +128,7 @@ function frame() {
   g.textAlign = 'left';
   sweep(deg); rim(); lever();
   g.font = '13px ui-monospace, "SF Mono", Menlo, monospace'; g.fillStyle = ink(1);
-  g.fillText(`${shown(t).length} planes above you`, 24, 30);
+  g.fillText(`${shown(t).length} planes above you`, tall ? 16 : 24, tall ? 24 : 30);
   g.font = '11px ui-monospace, Menlo, monospace';
   const r = reach / FAR, [hx, hy] = polar(225, r);    // how far you are listening
   g.strokeStyle = ink(pulling ? 0.9 : 0.5); g.beginPath(); g.arc(CX, CY, r * S, 0, 7); g.stroke();
@@ -161,7 +163,7 @@ function frame() {
   for (let i = 0; i < 12; i++) {         // the keys light as the planes play them; the chord's keys stay brighter
     const on = play.keys.has(i), f = t >= flash[i] ? Math.max(0, 1 - (t - flash[i]) / 0.8) : 0;
     const a = (inChord(i) ? 0.75 : 0.4) + 0.25 * f;   // solid colour, so a black key hides the white keys behind it
-    keys[i].style.background = on ? `rgb(${130 * a},${255 * a},${170 * a})` : '';
+    keys[i].style.background = on ? `rgb(${255 * a},${255 * a},${255 * a})` : '';
   }
   requestAnimationFrame(frame);
 }
@@ -177,16 +179,17 @@ const handPlays = p => {                 // a plane under your hand plays its no
   music.strike(kindOf(p), pitchOf(p), ctx.currentTime, 0.3, panOf(p));
   sang(p, ctx.currentTime, 1, pitchOf(p));
 };
-const onRing = e => Math.abs(Math.hypot(e.clientX - CX, e.clientY - CY) / S - reach / FAR) < 0.03;
+const grip = e => e.pointerType === 'touch' ? 1.6 : 1;   // a finger covers more than a cursor
+const onRing = e => Math.abs(Math.hypot(e.clientX - CX, e.clientY - CY) - reach / FAR * S) < 10 * grip(e);
 const aim = e => (Math.atan2(e.clientX - CX, CY - e.clientY) * 180 / Math.PI + 360) % 360;
-const onDial = e => { const [x, y] = polar(dialAz(), 1); return Math.hypot(e.clientX - x, e.clientY - y) < 16; };
+const onDial = e => { const [x, y] = polar(dialAz(), 1); return Math.hypot(e.clientX - x, e.clientY - y) < 16 * grip(e); };
 const onTrack = e => {                   // how far along the lever the hand is, 0 to 1
   const [ax, ay, bx, by] = track();
   return ((e.clientX - ax) * (bx - ax) + (e.clientY - ay) * (by - ay)) / ((bx - ax) ** 2 + (by - ay) ** 2);
 };
 const onLever = e => {
   const [ax, ay, bx, by] = track(), u = onTrack(e);
-  return u > -0.08 && u < 1.08 && Math.hypot(e.clientX - (ax + (bx - ax) * u), e.clientY - (ay + (by - ay) * u)) < 18;
+  return u > -0.08 && u < 1.08 && Math.hypot(e.clientX - (ax + (bx - ax) * u), e.clientY - (ay + (by - ay) * u)) < 18 * grip(e);
 };
 const inRadar = e => Math.hypot(e.clientX - CX, e.clientY - CY) < S;
 // Press inside the radar and the sweep comes to your hand. It plays what it crosses, then carries on.
@@ -224,7 +227,7 @@ canvas.addEventListener('pointermove', e => {
   } else if (pulling) {
     reach = Math.max(40, Math.min(FAR, Math.hypot(e.clientX - CX, e.clientY - CY) / S * FAR));
   } else {
-    hover = nearest(e.clientX, e.clientY);
+    hover = e.pointerType === 'mouse' ? nearest(e.clientX, e.clientY) : null;
   }
 });
 const letGo = () => {
@@ -255,6 +258,8 @@ function routeFits(p, o, e) {
   const turn = Math.abs(((bearing(p.lat, p.lon, e.latitude, e.longitude) * 180 / Math.PI - p.track + 180) % 360 + 360) % 360 - 180);
   return off < 200 && (turn < 60 || arc(p.lat, p.lon, e.latitude, e.longitude) * R < 200 || arc(p.lat, p.lon, o.latitude, o.longitude) * R < 200);
 }
+
+$('card').onclick = () => { picked = null; $('card').hidden = true; };
 
 async function choose(x, y) {
   const best = nearest(x, y);
@@ -297,7 +302,7 @@ const keys = [], flash = new Array(12).fill(-9);
   for (let i = 0; i < 12; i++) {
     const b = document.createElement('button'), black = i in blacks;
     b.className = black ? 'black' : 'white';
-    b.style.left = (black ? (blacks[i] + 1) * 24 - 7 : whites.indexOf(i) * 24) + 'px';
+    b.style.setProperty('--at', black ? blacks[i] + 1 : whites.indexOf(i));
     b.onclick = () => {
       if (play.keys.has(i)) { if (play.keys.size > 1) play.keys.delete(i); }
       else { play.keys.add(i); if (music && !muted) { music.strike('narrow', 60 + i, ctx.currentTime, 0.25, 0); flash[i] = now(); } }
@@ -309,10 +314,13 @@ const keys = [], flash = new Array(12).fill(-9);
 $('sound').onclick = () => {
   if (ctx) { muted = !muted; music.mute(muted); $('sound').textContent = muted ? 'listen' : 'stop listening'; return; }
   const t = now();
+  if (navigator.audioSession) navigator.audioSession.type = 'playback';   // otherwise an iphone on silent plays nothing
   ctx = new AudioContext(); ctx.resume(); audioShift = t - ctx.currentTime;
   music = new Music(ctx); music.setBeat(play.turn / play.beats);
   $('sound').textContent = 'stop listening'; $('note').hidden = false;
 };
+
+addEventListener('visibilitychange', () => { if (!document.hidden && ctx) ctx.resume(); });   // phones stop the sound in the background
 
 locate();
 setInterval(poll, POLL); setInterval(schedule, 250);
