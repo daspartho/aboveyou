@@ -1,7 +1,7 @@
 import { Music } from './audio.js';
 import { FAR, WORDS, play, parts, beat, hum, spread, inChord, kindOf, pitchOf, panOf } from './rules.js';
 
-const API = 'https://ensemble-above.vercel.app';
+const API = 'https://aboveyou.vercel.app';
 const POLL = 10_000;
 const $ = id => document.getElementById(id), rad = d => d * Math.PI / 180;
 const canvas = $('c'), g = canvas.getContext('2d');
