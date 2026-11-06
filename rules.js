@@ -75,7 +75,9 @@ export const kindOf = p => {
   const v = ranks[play.sound]?.get(p) ?? DATA[play.sound](p); return BY_SHARE.find(s => v < s[0])[1];
 };
 const OCTAVE = { tiny: 12, regional: 12, narrow: 0, long: 0, wide: -12, jumbo: -12 };   // big plates are low, small plates are high
-export const pitchOf = p => noteOf(p) + OCTAVE[kindOf(p)];
+const FLOOR = 40;                       // the bass lives below this, so nothing else goes there
+const aboveBass = m => m < FLOOR ? m + 12 * Math.ceil((FLOOR - m) / 12) : m;
+export const pitchOf = p => aboveBass(noteOf(p) + OCTAVE[kindOf(p)]);
 const loudOf = p => !parts.loudness ? 0.5 : 0.03 + 0.97 * value(play.loud, p) ** 2.5;
 export const panOf = p => Math.sin(p.az * Math.PI / 180) * 0.75;
 
@@ -86,6 +88,7 @@ export const parts = { hum: true, notes: true, pitch: true, timbre: true, loudne
 // The biggest plane in a quarter sets the chord: its own note, plus every other lit key above it.
 function chordOn(root) {
   const keys = [...play.keys].sort((a, b) => a - b), at = keys.indexOf(root % 12);
+  if (keys.length > 7) return new Set([0, 4, 7].map(up => snap(root % 12 + up + 12) % 12));   // every other key would be a cluster
   return new Set([0, 2, 4].map(step => keys[(at + step) % keys.length]));
 }
 function neighbour(m, dir) {             // the next key that is on, above or below
@@ -111,11 +114,11 @@ export function beat(music, n, at, list, heard) {
       bassNote = 33 + ((m - 33) % 12 + 12) % 12; chord = chordOn(m); heard(best, at, 1, m, true);
     }
   }
-  if (bassNote !== null && list.length && i % pulse === 0) music.bass(bassNote, at);
   const scale = 0.5 / (1 + list.length / 300);
   const accent = i % (pulse * 2) === 0 ? 1.25 : i % pulse === 0 ? 1.05 : i % 2 === 0 ? 0.85 : 0.65;   // some beats lean harder, as in any rhythm
   if (!parts.notes) return;
   const here = list.filter(p => Math.round(p.az / 360 * play.beats) % play.beats === i).sort((a, b) => RANK[play.tune](b) - RANK[play.tune](a));
+  if (bassNote !== null && here.length && i % pulse === 0) music.bass(bassNote, at);   // the bass only ever plays under a note
   here.forEach((p, order) => {
     const place = p.az / 360 * play.beats, slot = Math.round(place), lead = parts.tune && order === 0;
     const loud = loudOf(p), kind = kindOf(p);
@@ -125,15 +128,19 @@ export function beat(music, n, at, list, heard) {
     const level = (lead ? Math.max(loud, 0.3) * accent : loud * 0.55) * scale, far = lead ? 1 - Math.max(loud, 0.3) : Math.max(0.6, 1 - loud);
     // Only the lead lands on the beat. The rest keep their true angle and fall between beats, like rain.
     const when = at + (lead ? 0 : (place - slot + 0.5) * len);
-    music.strike(kind, m, when, level, panOf(p), far);
+    const pan = panOf(p) * (lead ? 0.25 : 1);   // the tune stays near the middle
+    music.strike(kind, m, when, level, pan, far);
     // A plane changing height is between two notes, so it plays the next one too.
-    if (parts.pitch && Math.abs(p.rate) > 300) music.strike(kind, neighbour(m, Math.sign(p.rate)), when + len / 2, level, panOf(p), far);
+    if (parts.pitch && Math.abs(p.rate) > 300) music.strike(kind, neighbour(m, Math.sign(p.rate)), when + len / 2, level, pan, far);
     heard(p, when, lead ? 1 : loud * 0.55, m);
   });
 }
 
-export function hum(music, t, list) {   // every plane in range holds its note an octave down
+export function hum(music, t, list) {   // every plane in range hums an octave below its note
   const levels = new Map();
-  if (parts.hum) for (const p of list) { const m = noteOf(p) - 12; levels.set(m, (levels.get(m) || 0) + 1); }
+  if (parts.hum) for (const p of list) {   // the hum holds the chord: each plane takes the nearest chord note
+    const own = aboveBass(noteOf(p) - 12), m = chord ? snap(own, chord) : own;
+    levels.set(m, (levels.get(m) || 0) + 1);
+  }
   music.hum(levels, t);
 }

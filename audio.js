@@ -22,9 +22,10 @@ export class Music {
     this.master.connect(limiter).connect(ctx.destination);
 
     this.dry = ctx.createGain(); this.dry.connect(this.master);
+    this.bassRoom = ctx.createGain(); this.bassRoom.gain.value = 0.1;                   // a little of the bass goes in the room, so it sits with the rest
     this.wet = ctx.createConvolver(); this.wet.buffer = this.room(2.8);
     const clear = ctx.createBiquadFilter(); clear.type = 'highpass'; clear.frequency.value = 130;   // keeps the room out of the bass's way
-    this.wet.connect(clear).connect(this.master);
+    this.wet.connect(clear).connect(this.master); this.bassRoom.connect(this.wet);
 
     // An echo three beats long, darker on each repeat.
     this.echo = ctx.createDelay(4); this.echo.delayTime.value = 2.25;
@@ -91,7 +92,7 @@ export class Music {
     s.type = 'sawtooth'; s.frequency.value = f; n.frequency.value = f; mix.gain.value = 0.4;
     lp.type = 'lowpass'; lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(160, t + 0.5);
     g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.2, t + 0.006); g.gain.setTargetAtTime(0, t + 0.006, 0.28);
-    s.connect(mix).connect(lp); n.connect(lp); lp.connect(g).connect(this.dry);
+    s.connect(mix).connect(lp); n.connect(lp); lp.connect(g).connect(this.dry); g.connect(this.bassRoom);
     s.start(t); n.start(t); s.stop(t + 1.5); n.stop(t + 1.5);
   }
 
