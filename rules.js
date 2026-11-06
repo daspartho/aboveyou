@@ -11,7 +11,7 @@ const height = p => p.alt < 29000 ? clamp(p.alt / 29000) * 0.3 : 0.3 + clamp((p.
 
 const DATA = {                   // every measure runs 0 to 1
   height,
-  size: p => Math.sqrt(clamp(sizeOf(p) / 500)),
+  size: p => Math.sqrt(clamp(sizeOf(p) / 575)),            // tonnes; the A380 is the heaviest
   distance: p => clamp(1 - p.d / FAR),                  // 1 is overhead
   heading: p => clamp(p.track / 360),
   speed: p => clamp(p.gs / 520),                        // knots; fast airliners reach about 520 over the ground
@@ -23,13 +23,13 @@ let ranks = {};
 export function spread(list) {
   ranks = {};
   for (const word of new Set([play.note, play.sound, play.loud])) {
-    if (SCALES.has(word)) continue;
-    const sorted = [...list].sort((a, b) => DATA[word](a) - DATA[word](b)), map = new Map();
+    if (SCALES.has(word) && word !== play.sound) continue;
+    const sorted = [...list].sort((a, b) => DATA[word](a) - DATA[word](b) || (a.hex < b.hex ? -1 : 1)), map = new Map();
     sorted.forEach((p, i) => map.set(p, sorted.length > 1 ? i / (sorted.length - 1) : 0.5));
     ranks[word] = map;
   }
 }
-const value = (word, p) => ranks[word]?.get(p) ?? DATA[word](p);
+const value = (word, p) => (SCALES.has(word) ? null : ranks[word]?.get(p)) ?? DATA[word](p);
 
 const RANK = {                          // who picks the chord
   biggest: sizeOf, nearest: p => -p.d, highest: p => p.alt, lowest: p => -p.alt, fastest: p => p.gs,
@@ -42,15 +42,12 @@ export const WORDS = {
   loud: ['distance', 'height', 'size', 'heading', 'speed'],
   deep: Object.keys(RANK),
   tune: Object.keys(RANK),
-  climb: ['two', 'three', 'four'],
-  descend: ['two', 'three', 'four'],
 };
-const COUNT = { two: 2, three: 3, four: 4 };
 
 export const play = {
   turn: 12, beats: 32,                  // seconds per sweep, and how many beats in a sweep
   note: 'height', sound: 'size', loud: 'distance', deep: 'biggest',
-  tune: 'nearest', climb: 'two', descend: 'two',
+  tune: 'nearest',
   keys: new Set([1, 3, 6, 8, 10]),      // the five black keys of a piano: they never clash
 };
 
@@ -67,27 +64,33 @@ const noteOf = p => {            // bigger plane, lower note, as with a big plat
   const v = value(play.note, p);
   return snap(LOW + Math.round((play.note === 'size' ? 1 - v : v) * SPAN));
 };
-// Size splits the sky into six sections. For size the cuts fall at about 50, 120, 170, 220 and 400 seats.
-const SECTIONS = [[0.316, 'tiny'], [0.49, 'regional'], [0.583, 'narrow'], [0.663, 'long'], [0.894, 'wide'], [Infinity, 'jumbo']];
-export const kindOf = p => { if (!parts.timbre) return 'narrow'; const v = value(play.sound, p); return SECTIONS.find(s => v < s[0])[1]; };
+// Six sections of the sky. By size the cuts fall in tonnes: an A320 and a 737-800 weigh the same, so they share an instrument.
+// Any other measure sorts the planes in range and shares them out in about the same balance, so the ensemble stays whole
+// however it is flipped: most planes on the two main voices, few on the longest sounds.
+const BY_SHARE = [[0.15, 'tiny'], [0.3, 'regional'], [0.65, 'narrow'], [0.85, 'long'], [0.97, 'wide'], [Infinity, 'jumbo']];
+const BY_SIZE = [[20, 'tiny'], [70, 'regional'], [90, 'narrow'], [150, 'long'], [340, 'wide'], [Infinity, 'jumbo']];
+export const kindOf = p => {
+  if (!parts.timbre) return 'narrow';
+  if (play.sound === 'size') return BY_SIZE.find(s => sizeOf(p) < s[0])[1];
+  const v = ranks[play.sound]?.get(p) ?? DATA[play.sound](p); return BY_SHARE.find(s => v < s[0])[1];
+};
 const OCTAVE = { tiny: 12, regional: 12, narrow: 0, long: 0, wide: -12, jumbo: -12 };   // big plates are low, small plates are high
 export const pitchOf = p => noteOf(p) + OCTAVE[kindOf(p)];
 const loudOf = p => !parts.loudness ? 0.5 : 0.03 + 0.97 * value(play.loud, p) ** 2.5;
 export const panOf = p => Math.sin(p.az * Math.PI / 180) * 0.75;
 
-function neighbour(m, dir) {             // the next key that is on, above or below
-  for (let d = 1; d <= 12; d++) if (play.keys.has((m + dir * d + 120) % 12)) return m + dir * d;
-  return m;
-}
-
 let bassNote = null, chord = null, lastLead = 66;
 export const inChord = i => chord?.has(i);
-export const parts = { hum: true, notes: true, pitch: true, timbre: true, loudness: true, tune: true, chord: true, climb: true, descend: true };   // each can be switched off from its line
+export const parts = { hum: true, notes: true, pitch: true, timbre: true, loudness: true, tune: true, chord: true };   // each can be switched off from its line
 
 // The biggest plane in a quarter sets the chord: its own note, plus every other lit key above it.
 function chordOn(root) {
   const keys = [...play.keys].sort((a, b) => a - b), at = keys.indexOf(root % 12);
   return new Set([0, 2, 4].map(step => keys[(at + step) % keys.length]));
+}
+function neighbour(m, dir) {             // the next key that is on, above or below
+  for (let d = 1; d <= 12; d++) if (play.keys.has((m + dir * d + 120) % 12)) return m + dir * d;
+  return m;
 }
 // A melody moves by small steps, so the lead takes its note in the octave closest to the last one.
 function closeBy(m) {
@@ -123,13 +126,8 @@ export function beat(music, n, at, list, heard) {
     // Only the lead lands on the beat. The rest keep their true angle and fall between beats, like rain.
     const when = at + (lead ? 0 : (place - slot + 0.5) * len);
     music.strike(kind, m, when, level, panOf(p), far);
-    const run = p.rate > 0 ? 'climb' : 'descend';
-    if (Math.abs(p.rate) > 300 && parts[run]) {
-      for (let s = 1, step = m; s < COUNT[play[run]]; s++) {
-        step = neighbour(step, Math.sign(p.rate));
-        music.strike(kind, step, when + s * len / 2, level, panOf(p), far);
-      }
-    }
+    // A plane changing height is between two notes, so it plays the next one too.
+    if (parts.pitch && Math.abs(p.rate) > 300) music.strike(kind, neighbour(m, Math.sign(p.rate)), when + len / 2, level, panOf(p), far);
     heard(p, when, lead ? 1 : loud * 0.55, m);
   });
 }

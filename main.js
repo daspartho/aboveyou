@@ -1,14 +1,15 @@
 import { Music } from './audio.js';
+import { coastAround } from './map.js';
 import { FAR, WORDS, play, parts, beat, hum, spread, inChord, kindOf, pitchOf, panOf } from './rules.js';
 
 const API = 'https://aboveyou.vercel.app';
-const POLL = 10_000;
+const POLL = 10_000, RETRY = 3_000, WAIT = 12_000;
 const $ = id => document.getElementById(id), rad = d => d * Math.PI / 180;
 const canvas = $('c'), g = canvas.getContext('2d');
 const ink = a => `rgba(255,255,255,${a})`;
 
 let home = null, planes = new Map(), ctx = null, music = null, picked = null, muted = false;
-let tall = false, W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null;
+let tall = false, W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null, answered = false, fails = 0, coast = null, land = null, map = false;
 function resize() {
   const d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
   tall = W / H < 1.2;                    // on tall screens the note sits under the radar and scrolls, on wide ones beside it
@@ -16,6 +17,8 @@ function resize() {
   CX = tall ? W / 2 : Math.max(W / 2, 325 + S * 1.1);
   CY = tall ? 44 + S * 1.1 : H / 2;
   document.documentElement.style.setProperty('--below', `${CY + S * 1.2 + 34 | 0}px`);
+  $('map').style.left = `${CX - S * 0.72}px`; $('map').style.top = `${CY - S * 0.72}px`;   // on the radar's north-west, the one side with no handle
+  drawCoast();
   canvas.width = W * d | 0; canvas.height = H * d | 0; g.setTransform(d, 0, 0, d, 0, 0);
 }
 addEventListener('resize', resize); resize();
@@ -39,12 +42,15 @@ const turns = t => holding ? mark.turns : mark.turns + (t - mark.t) / play.turn;
 const beatTime = n => mark.t + (n / play.beats - mark.turns) * play.turn;
 function retime(apply) { const t = now(); mark = { t, turns: turns(t) }; apply(); next = null; music?.setBeat(play.turn / play.beats); }
 
+const kmFrom = (lat, lon) => [((lon - home[1] + 540) % 360 - 180) * 111.32 * Math.cos(rad(home[0])), (lat - home[0]) * 110.57];
+
 async function poll() {
-  if (!home) return;
   try {
-    const d = await (await fetch(`${API}/api/sky?lat=${home[0]}&lon=${home[1]}`)).json(), seen = new Set();
+    const r = await fetch(`${API}/api/sky?lat=${home[0]}&lon=${home[1]}`, { signal: AbortSignal.timeout(WAIT) });
+    if (!r.ok) throw r;
+    const d = await r.json(), seen = new Set();
     for (const a of d.ac) {
-      const x0 = (a.lon - home[1]) * 111.32 * Math.cos(rad(home[0])), y0 = (a.lat - home[0]) * 110.57;
+      const [x0, y0] = kmFrom(a.lat, a.lon);
       if (Math.hypot(x0, y0) > FAR) continue;
       seen.add(a.hex);
       const p = planes.get(a.hex) || { sang: -1e9, sangLoud: 0 };
@@ -53,7 +59,16 @@ async function poll() {
       planes.set(a.hex, p);
     }
     for (const h of planes.keys()) if (!seen.has(h)) planes.delete(h);
-  } catch {}
+    if (!answered) { answered = true; opened = now(); }
+    fails = 0;
+  } catch { if (++fails > 1) { planes.clear(); answered = false; } }   // nothing to play, so the music stops until the planes are back
+  setTimeout(poll, fails ? RETRY : POLL);
+}
+
+function status(t) {
+  const n = shown(t).length;
+  if (!answered || (!n && t - opened < OPENING)) return 'looking for planes';
+  return `${n} plane${n === 1 ? '' : 's'} found above you`;
 }
 
 const sang = (p, at, loud, m, deep) => {
@@ -122,13 +137,15 @@ function frame() {
   g.font = '11px ui-monospace, Menlo, monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
   g.strokeStyle = ink(0.16); g.lineWidth = 1;
   for (const km of [100, 200, 300, 400, FAR]) { g.beginPath(); g.arc(CX, CY, km / FAR * S, 0, 7); g.stroke(); }
+  if (map && coast) { g.save(); g.beginPath(); g.arc(CX, CY, S, 0, 7); g.clip(); g.strokeStyle = ink(0.32); g.stroke(coast); g.restore(); }
   g.beginPath(); g.moveTo(CX - S, CY); g.lineTo(CX + S, CY); g.moveTo(CX, CY - S); g.lineTo(CX, CY + S); g.stroke();
   g.fillStyle = ink(0.5); g.textAlign = 'center';
   ['n', 'e', 's', 'w'].forEach((l, i) => { const [x, y] = polar(i * 90, 1.05); g.fillText(l, x, y); });
   g.textAlign = 'left';
   sweep(deg); rim(); lever();
   g.font = '13px ui-monospace, "SF Mono", Menlo, monospace'; g.fillStyle = ink(1);
-  g.fillText(`${shown(t).length} planes above you`, tall ? 16 : 24, tall ? 24 : 30);
+  const said = status(t), x = tall ? 16 : 24, tight = tall && g.measureText(said).width > $('sound').offsetLeft + 8 - x;
+  g.fillText(tight ? said.replace(' found', '') : said, x, tall ? 24 : 30);
   g.font = '11px ui-monospace, Menlo, monospace';
   const r = reach / FAR, [hx, hy] = polar(225, r);    // how far you are listening
   g.strokeStyle = ink(pulling ? 0.9 : 0.5); g.beginPath(); g.arc(CX, CY, r * S, 0, 7); g.stroke();
@@ -231,7 +248,7 @@ canvas.addEventListener('pointermove', e => {
   }
 });
 const letGo = () => {
-  pulling = dialing = levering = false; pressed = null;
+  pulling = dialing = levering = false; pressed = null; save();
   if (!holding) return;
   mark = { t: now(), turns: holding.deg / 360 }; holding = null; next = null;
 };
@@ -274,26 +291,79 @@ async function choose(x, y) {
   } catch {}
 }
 
-function go(lat, lon) { home = [lat, lon]; opened = now() + 0.4; poll(); }
+// The link holds the place and every setting that differs from the start, so a link opens as it was left.
+const settings = () => ({
+  sweep: play.turn, beats: play.beats, note: play.note, instrument: play.sound, loud: play.loud, tune: play.tune, chord: play.deep,
+  keys: [...play.keys].sort((a, b) => a - b).join(), range: Math.round(reach),
+  map: map ? 'on' : 'off', off: Object.keys(parts).filter(k => !parts[k]).join(),
+});
+const START = settings();
+
+function save() {
+  if (!home) return;
+  const s = settings(), changed = Object.keys(s).filter(k => s[k] !== START[k]).map(k => `${k}=${s[k]}`);
+  history.replaceState(null, '', `?${[`lat=${home[0]}`, `lon=${home[1]}`, ...changed].join('&')}`);
+}
+
+function restore() {
+  const q = new URLSearchParams(location.search);
+  const number = (k, low, high) => { const v = Math.round(parseFloat(q.get(k))); return v >= low && v <= high ? v : null; };
+  for (const [rule, word] of Object.entries({ note: 'note', sound: 'instrument', loud: 'loud', tune: 'tune', deep: 'chord' })) {
+    if (WORDS[rule].includes(q.get(word))) play[rule] = q.get(word);
+  }
+  play.turn = number('sweep', FASTEST, SLOWEST) ?? play.turn;
+  play.beats = number('beats', 4, 96) ?? play.beats;
+  reach = number('range', 40, FAR) ?? reach;
+  showMap(q.get('map') === 'on');
+  const lit = (q.get('keys') ?? '').split(',').filter(k => /^\d+$/.test(k) && k < 12).map(Number);
+  if (lit.length) play.keys = new Set(lit);
+  for (const k of (q.get('off') ?? '').split(',')) if (parts[k] === true) parts[k] = false;
+  for (const el of document.querySelectorAll('[data-rule]')) el.textContent = play[el.dataset.rule];
+  for (const el of document.querySelectorAll('[data-part]')) el.classList.toggle('off', !parts[el.dataset.part]);
+}
+
+function go(place) { home = place; save(); loadCoast(); poll(); }
+
+// The coast, turned into a path only when place or screen changes.
+function drawCoast() {
+  if (!land || !home) return;
+  coast = new Path2D();
+  for (const line of land) line.forEach(([lat, lon], i) => {
+    const [x, y] = kmFrom(lat, lon), px = CX + x / FAR * S, py = CY - y / FAR * S;
+    if (i) coast.lineTo(px, py); else coast.moveTo(px, py);
+  });
+}
+
+function linked() {                      // a place written in the link, which is also how to hear somewhere else
+  const q = new URLSearchParams(location.search), lat = parseFloat(q.get('lat')), lon = parseFloat(q.get('lon'));
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? [lat, lon] : null;
+}
+
+// Settings travel with a link, a place doesn't: a link opened fresh, or a reload, always shows the sky above you.
+// Only changing the link in a tab already open here goes somewhere else.
+const place = sessionStorage.getItem('open') && performance.getEntriesByType('navigation')[0]?.type !== 'reload' ? linked() : null;
+sessionStorage.setItem('open', '1');
 
 async function locate() {
+  if (place) return go(place);
   try {                                  // rough location from the connection, so no permission prompt
-    const r = await fetch(`${API}/api/where`);
-    if (r.ok) { const q = await r.json(); return go(q.lat, q.lon); }
-  } catch {}
-  go(28.57, 77.32);                      // if that fails, a sky to show anyway
+    const r = await fetch(`${API}/api/where`, { signal: AbortSignal.timeout(WAIT) });
+    if (!r.ok) throw r;
+    const q = await r.json();
+    go([q.lat, q.lon]);
+  } catch { fails++; setTimeout(locate, RETRY); }
 }
 
 // The note on the page is also its controls: every marked word can be changed.
 for (const el of document.querySelectorAll('[data-rule]')) el.onclick = () => {
   const list = WORDS[el.dataset.rule], word = list[(list.indexOf(play[el.dataset.rule]) + 1) % list.length];
-  play[el.dataset.rule] = word; el.textContent = word;
+  play[el.dataset.rule] = word; el.textContent = word; save();
 };
 
 // A line that describes a part of the music switches that part off and on.
 for (const el of document.querySelectorAll('[data-part]')) el.onclick = e => {
   if (e.target.dataset.rule) return;
-  const k = el.dataset.part; parts[k] = !parts[k]; el.classList.toggle('off', !parts[k]);
+  const k = el.dataset.part; parts[k] = !parts[k]; el.classList.toggle('off', !parts[k]); save();
 };
 
 const keys = [], flash = new Array(12).fill(-9);
@@ -306,6 +376,7 @@ const keys = [], flash = new Array(12).fill(-9);
     b.onclick = () => {
       if (play.keys.has(i)) { if (play.keys.size > 1) play.keys.delete(i); }
       else { play.keys.add(i); if (music && !muted) { music.strike('narrow', 60 + i, ctx.currentTime, 0.25, 0); flash[i] = now(); } }
+      save();
     };
     keys[i] = b; $('keys').append(b);
   }
@@ -322,6 +393,12 @@ $('sound').onclick = () => {
 
 addEventListener('visibilitychange', () => { if (!document.hidden && ctx) ctx.resume(); });   // phones stop the sound in the background
 
-locate();
-setInterval(poll, POLL); setInterval(schedule, 250);
+function loadCoast() {                   // only if someone turns the map on
+  if (map && home && !land) coastAround(home[0], home[1], FAR * 1.1).then(l => { land = l; drawCoast(); }).catch(() => {});
+}
+function showMap(on) { map = on; $('map').classList.toggle('off', !on); $('mapcredit').hidden = !on; loadCoast(); }
+$('map').onclick = () => { showMap(!map); save(); };
+
+restore(); locate();
+setInterval(schedule, 250);
 requestAnimationFrame(frame);

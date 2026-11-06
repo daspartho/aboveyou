@@ -3,29 +3,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#000">
-<title>aboveyou</title>
+<title>above you</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 <canvas id="c"></canvas>
 <button id="sound">listen</button>
+<button id="map" class="off">map</button>
 <div id="card" hidden></div>
 <div id="below">
 <div id="note" hidden>
-  <p data-part="hum">each plane hums all the time</p>
-  <p data-part="notes">the radar plays each plane</p>
+  <p data-part="hum">every plane hums</p>
+  <p data-part="notes">radar plays each plane</p>
   <div class="rules">
     <p data-part="pitch"><b data-rule="note">height</b> picks the note</p>
     <p data-part="timbre"><b data-rule="sound">size</b> picks the instrument</p>
     <p data-part="loudness"><b data-rule="loud">distance</b> picks how loud</p>
   </div>
-  <p data-part="tune">the <b data-rule="tune">nearest</b> one plays the tune</p>
-  <p data-part="chord">the <b data-rule="deep">biggest</b> one picks the chord</p>
-  <p data-part="climb">climbing planes go up <b data-rule="climb">two</b> notes</p>
-  <p data-part="descend">descending ones go down <b data-rule="descend">two</b> notes</p>
+  <p data-part="tune"><b data-rule="tune">nearest</b> one plays the tune</p>
+  <p data-part="chord"><b data-rule="deep">biggest</b> one picks the chord</p>
   <p class="label">notes the planes can play</p>
   <div id="keys"></div>
 </div>
-<div id="source">data from <a href="https://adsb.fi" target="_blank" rel="noopener">adsb.fi</a> and <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> (odbl)<br><a href="https://github.com/daspartho/aboveyou" target="_blank" rel="noopener">source code</a></div>
+<div id="source"><a href="https://github.com/daspartho/aboveyou" target="_blank" rel="noopener">source code</a><br>data from <a href="https://adsb.fi" target="_blank" rel="noopener">adsb.fi</a> and <a href="https://adsb.lol" target="_blank" rel="noopener">adsb.lol</a> (odbl)<span id="mapcredit" hidden><br>map from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">openstreetmap</a> and <a href="https://openmaptiles.org" target="_blank" rel="noopener">openmaptiles</a></span></div>
 </div>
 <script type="module" src="main.js"></script>
 </html>

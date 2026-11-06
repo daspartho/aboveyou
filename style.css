@@ -5,6 +5,8 @@ canvas { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: non
 button { all: unset; cursor: pointer; }
 button:focus-visible { outline: 1px solid currentColor; outline-offset: 4px; }
 #sound { position: fixed; top: 46px; left: 24px; }
+#map { position: fixed; padding: 12px; transform: translate(-100%, -100%); }
+#map.off { opacity: .4; }
 #card { position: fixed; top: 20px; right: 24px; width: 230px; white-space: pre-line; pointer-events: none; background: #000; }
 #below { display: contents; }
 #source { position: fixed; bottom: 20px; right: 24px; text-align: right; color: rgba(255, 255, 255, .55); font-size: 11px; }
