@@ -101,14 +101,18 @@ export class Music {
     let all = 0; for (const w of levels.values()) all += w;
     const fill = 0.05 * (1 - Math.exp(-all / 25));
     for (const m of levels.keys()) if (!this.hums.has(m)) this.hums.set(m, this.humVoice(m));
-    for (const [m, v] of this.hums) v.setTargetAtTime(levels.has(m) ? fill * Math.sqrt(levels.get(m) / all) : 0, t, 0.5);
+    for (const [m, v] of this.hums) {
+      if (levels.has(m)) { v.gain.setTargetAtTime(fill * Math.sqrt(levels.get(m) / all), t, 0.5); v.quiet = null; continue; }
+      if (v.quiet === null) { v.gain.setTargetAtTime(0, t, 0.5); v.quiet = t; }
+      else if (t - v.quiet > 5) { v.stop(); this.hums.delete(m); }   // ten fade times on, it is silence, so stop working it out
+    }
   }
   humVoice(m) {                                // two voices a hair apart, so each note breathes slowly
     const { ctx } = this, g = ctx.createGain(); g.gain.value = 0; g.connect(this.humBus);
-    for (const off of [-0.07, 0.07]) {
-      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz(m) + off; o.connect(g); o.start();
-    }
-    return g.gain;
+    const voices = [-0.07, 0.07].map(off => {
+      const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz(m) + off; o.connect(g); o.start(); return o;
+    });
+    return { gain: g.gain, quiet: null, stop: () => { for (const o of voices) o.stop(); g.disconnect(); } };
   }
 
   mute(on) {                                   // clears the fade-in first, or stopping during it leaves the hum playing

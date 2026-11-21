@@ -1,9 +1,9 @@
 import { Music } from './audio.js';
-import { coastAround } from './map.js';
+import { landAround } from './map.js';
 import { FAR, WORDS, play, parts, beat, hum, spread, inChord, kindOf, pitchOf, panOf } from './rules.js';
 
 const API = 'https://aboveyou.vercel.app';
-const POLL = 10_000, RETRY = 3_000, WAIT = 12_000;
+const POLL = 15_000, RETRY = 3_000, WAIT = 12_000;
 const $ = id => document.getElementById(id), rad = d => d * Math.PI / 180;
 const canvas = $('c'), g = canvas.getContext('2d');
 const ink = a => `rgba(255,255,255,${a})`;
@@ -324,7 +324,7 @@ function restore() {
 
 function go(place) { home = place; save(); loadCoast(); poll(); }
 
-// The coast, turned into a path only when place or screen changes.
+// The map lines, turned into a path only when place or screen changes.
 function drawCoast() {
   if (!land || !home) return;
   coast = new Path2D();
@@ -386,7 +386,8 @@ $('sound').onclick = () => {
   if (ctx) { muted = !muted; music.mute(muted); $('sound').textContent = muted ? 'listen' : 'stop listening'; return; }
   const t = now();
   if (navigator.audioSession) navigator.audioSession.type = 'playback';   // otherwise an iphone on silent plays nothing
-  ctx = new AudioContext(); ctx.resume(); audioShift = t - ctx.currentTime;
+  // Half the usual detail: it holds every pitch up to 12,000 Hz, where this music has a millionth of its energy, and halves the work, so slow phones keep up in a busy sky.
+  ctx = new AudioContext({ sampleRate: 24000 }); ctx.resume(); audioShift = t - ctx.currentTime;
   music = new Music(ctx); music.setBeat(play.turn / play.beats);
   $('sound').textContent = 'stop listening'; $('note').hidden = false;
 };
@@ -394,7 +395,7 @@ $('sound').onclick = () => {
 addEventListener('visibilitychange', () => { if (!document.hidden && ctx) ctx.resume(); });   // phones stop the sound in the background
 
 function loadCoast() {                   // only if someone turns the map on
-  if (map && home && !land) coastAround(home[0], home[1], FAR * 1.1).then(l => { land = l; drawCoast(); }).catch(() => {});
+  if (map && home && !land) landAround(home[0], home[1], FAR * 1.1).then(l => { land = l; drawCoast(); }).catch(() => {});
 }
 function showMap(on) { map = on; $('map').classList.toggle('off', !on); $('mapcredit').hidden = !on; loadCoast(); }
 $('map').onclick = () => { showMap(!map); save(); };
