@@ -6,6 +6,8 @@
 // Each place asks again EVERY after its last answer, the pace the page asks at;
 // with more places in the line, turns come round later, and that is all crowding does.
 // A place nobody has asked about for a minute is closed. When adsb.fi says wait, everything waits.
+import { waitUntil } from '@vercel/functions';
+// Vercel pauses a function once it has replied, so the request behind each reply is handed to waitUntil to run to its end.
 const RADIUS_NM = 250, EVERY = 15_000, GAP = 1_100, CURRENT = 60_000, CLOSE = 60_000;
 const areas = new Map();
 
@@ -46,13 +48,17 @@ async function planes(lat, lon) {
 function refresh(area) {
   if (area.busy || (area.sky && !area.failing && Date.now() < area.next)) return area.busy;
   const first = !area.tried; area.tried = true;
-  area.busy = turn(area, first).then(go => go ? planes(area.lat, area.lon) : Promise.reject(Object.assign(new Error('nobody listening'), { left: true })))
-    .then(list => { area.sky = list; area.heard = Date.now(); area.failing = false; area.next = Date.now() + EVERY; },
+  let sent;
+  area.busy = turn(area, first).then(go => go ? (sent = Date.now(), planes(area.lat, area.lon)) : Promise.reject(Object.assign(new Error('nobody listening'), { left: true })))
+    .then(list => {
+      area.sky = list; area.heard = Date.now(); area.failing = false; area.next = Date.now() + EVERY;
+      console.log('adsb.fi', area.id, 'answered in', Date.now() - sent, 'ms');   // every request is logged with its time, so slowing shows before it fails
+    },
       e => {
         if (e.left) throw e;
         area.failing = true;
         if (e.wait) free = Math.max(free, Date.now() + e.wait);   // told to wait, and that holds for every place
-        console.log('adsb.fi', area.id, 'failed:', e.message);
+        console.log('adsb.fi', area.id, 'failed after', Date.now() - sent, 'ms:', e.message);
         throw e;
       })
     .finally(() => { area.busy = null; });
@@ -69,6 +75,7 @@ async function sky(lat, lon) {
   const area = areas.get(id), fresh = !area.tried;
   area.asked = now;
   const job = refresh(area);
+  if (job) waitUntil(job.catch(() => {}));
   if (fresh && job) { area.waiting++; await job.catch(() => {}); area.waiting--; }   // a newcomer is first in line, so wait for its answer
   if (!area.sky || (area.failing && Date.now() - area.heard > CURRENT)) return null;   // no sky to give, which is not the same as an empty sky
   return area.sky;

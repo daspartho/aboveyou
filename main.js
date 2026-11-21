@@ -1,5 +1,6 @@
 import { Music } from './audio.js';
-import { landAround } from './map.js';
+import { mapAround } from './map.js';
+import { sizeOf } from './size.js';
 import { FAR, WORDS, play, parts, beat, hum, spread, inChord, kindOf, pitchOf, panOf } from './rules.js';
 
 const API = 'https://aboveyou.vercel.app';
@@ -9,7 +10,7 @@ const canvas = $('c'), g = canvas.getContext('2d');
 const ink = a => `rgba(255,255,255,${a})`;
 
 let home = null, planes = new Map(), ctx = null, music = null, picked = null, muted = false;
-let tall = false, W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null, answered = false, fails = 0, coast = null, land = null, map = false;
+let tall = false, W = 0, H = 0, S = 0, CX = 0, CY = 0, next = null, pulling = false, pressed = null, holding = null, dialing = false, levering = false, reach = FAR, opened = 0, hover = null, deepOne = null, answered = false, fails = 0, mapPath = null, mapLines = null, map = false;
 function resize() {
   const d = Math.min(devicePixelRatio || 1, 2); W = innerWidth; H = innerHeight;
   tall = W / H < 1.2;                    // on tall screens the note sits under the radar and scrolls, on wide ones beside it
@@ -18,7 +19,7 @@ function resize() {
   CY = tall ? 44 + S * 1.1 : H / 2;
   document.documentElement.style.setProperty('--below', `${CY + S * 1.2 + 34 | 0}px`);
   $('map').style.left = `${CX - S * 0.72}px`; $('map').style.top = `${CY - S * 0.72}px`;   // on the radar's north-west, the one side with no handle
-  drawCoast();
+  drawMap();
   canvas.width = W * d | 0; canvas.height = H * d | 0; g.setTransform(d, 0, 0, d, 0, 0);
 }
 addEventListener('resize', resize); resize();
@@ -137,7 +138,7 @@ function frame() {
   g.font = '11px ui-monospace, Menlo, monospace'; g.textAlign = 'left'; g.textBaseline = 'middle';
   g.strokeStyle = ink(0.16); g.lineWidth = 1;
   for (const km of [100, 200, 300, 400, FAR]) { g.beginPath(); g.arc(CX, CY, km / FAR * S, 0, 7); g.stroke(); }
-  if (map && coast) { g.save(); g.beginPath(); g.arc(CX, CY, S, 0, 7); g.clip(); g.strokeStyle = ink(0.32); g.stroke(coast); g.restore(); }
+  if (map && mapPath) { g.save(); g.beginPath(); g.arc(CX, CY, S, 0, 7); g.clip(); g.strokeStyle = ink(0.32); g.stroke(mapPath); g.restore(); }
   g.beginPath(); g.moveTo(CX - S, CY); g.lineTo(CX + S, CY); g.moveTo(CX, CY - S); g.lineTo(CX, CY + S); g.stroke();
   g.fillStyle = ink(0.5); g.textAlign = 'center';
   ['n', 'e', 's', 'w'].forEach((l, i) => { const [x, y] = polar(i * 90, 1.05); g.fillText(l, x, y); });
@@ -162,7 +163,7 @@ function frame() {
     if (p === deepOne && !muted) { g.strokeStyle = ink(0.45); g.beginPath(); g.arc(x, y, 7, 0, 7); g.stroke(); }
     const since = (deg - p.az + 360) % 360 / 360 * play.turn, far = p.d > reach ? 0.25 : 1;
     const glow = since < fade ? (1 - since / fade) ** 2.2 : 0;
-    const big = /A[45]/.test(p.cat || '') ? 2.6 : /A3/.test(p.cat || '') ? 1.9 : 1.3;
+    const big = 1.2 + 1.7 * Math.sqrt(sizeOf(p) / 575);   // radius from the same weight that picks its instrument: 1.3 for a small plane, 1.8 an A320, 2.9 the A380
     const tail = p.gs * 1.852 / 30 / FAR * S;                       // where it was two minutes ago
     g.strokeStyle = ink((0.16 + glow * 0.4) * far); g.beginPath(); g.moveTo(x, y);
     g.lineTo(x - Math.sin(rad(p.track)) * tail, y + Math.cos(rad(p.track)) * tail); g.stroke();
@@ -254,12 +255,11 @@ const letGo = () => {
 };
 canvas.addEventListener('pointerup', letGo); canvas.addEventListener('pointercancel', letGo);
 
-function card(p, route) {
+function card(p) {
   const motion = Math.abs(p.rate) < 300 ? 'level' : p.rate > 0 ? 'climbing' : 'descending';
   $('card').textContent = [
-    [route?.airline, p.flight].filter(Boolean).join(' ').toLowerCase() || p.reg?.toLowerCase() || p.hex,
+    (p.flight || p.reg || p.hex).toLowerCase(),
     (p.desc || p.type || '').toLowerCase(),
-    route?.path,
     `${(Math.round(p.alt / 100) * 100).toLocaleString('en')} ft, ${motion}`,
     `${Math.round(p.gs * 1.852)} km/h, ${Math.round(p.d)} km from you`,
     p.oat != null ? `${p.oat}°c outside` : null,
@@ -267,28 +267,11 @@ function card(p, route) {
   $('card').hidden = false;
 }
 
-// A route only shows if it fits where the plane really is: about 1 in 5 lookups is out of date.
-function routeFits(p, o, e) {
-  const R = 6371, arc = (a, b, c, d) => 2 * Math.asin(Math.sqrt(Math.sin(rad(c - a) / 2) ** 2 + Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(rad(d - b) / 2) ** 2));
-  const bearing = (a, b, c, d) => Math.atan2(Math.sin(rad(d - b)) * Math.cos(rad(c)), Math.cos(rad(a)) * Math.sin(rad(c)) - Math.sin(rad(a)) * Math.cos(rad(c)) * Math.cos(rad(d - b)));
-  const off = Math.abs(Math.asin(Math.sin(arc(o.latitude, o.longitude, p.lat, p.lon)) * Math.sin(bearing(o.latitude, o.longitude, p.lat, p.lon) - bearing(o.latitude, o.longitude, e.latitude, e.longitude)))) * R;
-  const turn = Math.abs(((bearing(p.lat, p.lon, e.latitude, e.longitude) * 180 / Math.PI - p.track + 180) % 360 + 360) % 360 - 180);
-  return off < 200 && (turn < 60 || arc(p.lat, p.lon, e.latitude, e.longitude) * R < 200 || arc(p.lat, p.lon, o.latitude, o.longitude) * R < 200);
-}
-
 $('card').onclick = () => { picked = null; $('card').hidden = true; };
 
-async function choose(x, y) {
-  const best = nearest(x, y);
-  picked = best;
-  if (!best) { $('card').hidden = true; return; }
-  card(best);
-  if (!best.flight) return;
-  try {
-    const r = (await (await fetch(`https://api.adsbdb.com/v0/callsign/${best.flight}`)).json()).response?.flightroute;
-    if (picked !== best || !r) return;
-    card(best, { airline: r.airline?.name, path: routeFits(best, r.origin, r.destination) ? `${r.origin.municipality} to ${r.destination.municipality}`.toLowerCase() : null });
-  } catch {}
+function choose(x, y) {
+  picked = nearest(x, y);
+  if (picked) card(picked); else $('card').hidden = true;
 }
 
 // The link holds the place and every setting that differs from the start, so a link opens as it was left.
@@ -322,15 +305,15 @@ function restore() {
   for (const el of document.querySelectorAll('[data-part]')) el.classList.toggle('off', !parts[el.dataset.part]);
 }
 
-function go(place) { home = place; save(); loadCoast(); poll(); }
+function go(place) { home = place; save(); loadMap(); poll(); }
 
 // The map lines, turned into a path only when place or screen changes.
-function drawCoast() {
-  if (!land || !home) return;
-  coast = new Path2D();
-  for (const line of land) line.forEach(([lat, lon], i) => {
+function drawMap() {
+  if (!mapLines || !home) return;
+  mapPath = new Path2D();
+  for (const line of mapLines) line.forEach(([lat, lon], i) => {
     const [x, y] = kmFrom(lat, lon), px = CX + x / FAR * S, py = CY - y / FAR * S;
-    if (i) coast.lineTo(px, py); else coast.moveTo(px, py);
+    if (i) mapPath.lineTo(px, py); else mapPath.moveTo(px, py);
   });
 }
 
@@ -351,7 +334,7 @@ async function locate() {
     if (!r.ok) throw r;
     const q = await r.json();
     go([q.lat, q.lon]);
-  } catch { fails++; setTimeout(locate, RETRY); }
+  } catch { setTimeout(locate, RETRY); }   // only the planes count failures; not knowing the place yet just means asking again
 }
 
 // The note on the page is also its controls: every marked word can be changed.
@@ -394,10 +377,14 @@ $('sound').onclick = () => {
 
 addEventListener('visibilitychange', () => { if (!document.hidden && ctx) ctx.resume(); });   // phones stop the sound in the background
 
-function loadCoast() {                   // only if someone turns the map on
-  if (map && home && !land) landAround(home[0], home[1], FAR * 1.1).then(l => { land = l; drawCoast(); }).catch(() => {});
+let mapDone = false;
+function loadMap() {                   // only if someone turns the map on; whatever did not load is tried again while it is on
+  if (!map || !home || mapDone) return;
+  mapAround(home[0], home[1], FAR * 1.1)
+    .then(({ lines, whole }) => { mapLines = lines; mapDone = whole; drawMap(); if (!whole) setTimeout(loadMap, RETRY); })
+    .catch(() => setTimeout(loadMap, RETRY));
 }
-function showMap(on) { map = on; $('map').classList.toggle('off', !on); $('mapcredit').hidden = !on; loadCoast(); }
+function showMap(on) { map = on; $('map').classList.toggle('off', !on); $('mapcredit').hidden = !on; loadMap(); }
 $('map').onclick = () => { showMap(!map); save(); };
 
 restore(); locate();

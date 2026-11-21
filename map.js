@@ -27,7 +27,7 @@ function numbers(b) {
 }
 const text = b => new TextDecoder().decode(b);
 
-function landLines(bytes, tx, ty) {
+function mapLinesIn(bytes, tx, ty) {
   const lines = [];
   for (const [id, layer] of fields(bytes)) {
     if (id !== 3) continue;
@@ -60,13 +60,19 @@ function landLines(bytes, tx, ty) {
   return lines;
 }
 
-export async function landAround(lat, lon, km) {
+// Tiles already read are kept, so a retry only fetches what failed. Answers what it has, and whether that is all of it.
+const read = new Map();
+export async function mapAround(lat, lon, km) {
   const dlat = km / 110.57, dlon = km / (111.32 * Math.cos(lat * Math.PI / 180));
   const [x0, y0] = tileOf(Math.min(lat + dlat, 85), lon - dlon), [x1, y1] = tileOf(Math.max(lat - dlat, -85), lon + dlon);
-  const { tiles: [url] } = await (await fetch('https://tiles.openfreemap.org/planet')).json(), jobs = [], n = 2 ** ZOOM;
+  const { tiles: [url] } = await (await fetch('https://tiles.openfreemap.org/planet')).json(), jobs = [], n = 2 ** ZOOM, wanted = [];
   for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
-    const wrap = (x % n + n) % n;
-    jobs.push(fetch(url.replace('{z}', ZOOM).replace('{x}', wrap).replace('{y}', y)).then(r => r.ok ? r.arrayBuffer() : null).then(b => b ? landLines(new Uint8Array(b), wrap, y) : []));
+    const wrap = (x % n + n) % n, key = `${wrap}/${y}`;
+    wanted.push(key);
+    if (!read.has(key)) jobs.push(fetch(url.replace('{z}', ZOOM).replace('{x}', wrap).replace('{y}', y))
+      .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r)).then(b => read.set(key, mapLinesIn(new Uint8Array(b), wrap, y))).catch(() => {}));
   }
-  return (await Promise.all(jobs)).flat();
+  await Promise.all(jobs);
+  const have = wanted.filter(k => read.has(k));
+  return { lines: have.flatMap(k => read.get(k)), whole: have.length === wanted.length };
 }
