@@ -1,13 +1,30 @@
-// adsb.fi blocks browser calls, so this asks it for the page.
-// It allows one request a second from us, so every place waits its turn in one line, and each place is asked every 15 seconds.
-const RADIUS_NM = 250, EVERY = 15_000, RETRY = 3_000, GAP = 1_100, FRESH = 30_000;
+// adsb.fi blocks browser calls, so this asks it for the page. The rules:
+// A place shows its latest sky from adsb.fi until a new one arrives. A failed request keeps the last sky, unless that sky is over
+// a minute old, then there is nothing to show; a long line alone never takes a sky away.
+// All places share one line, a request at a time, spaced by adsb.fi's limit of one a second.
+// A new place's first request goes to the front; every later one, including a retry after a failure, waits its normal turn, so failures never crowd out the rest.
+// Each place asks again EVERY after its last answer, the pace the page asks at;
+// with more places in the line, turns come round later, and that is all crowding does.
+// A place nobody has asked about for a minute is closed. When adsb.fi says wait, everything waits.
+const RADIUS_NM = 250, EVERY = 15_000, GAP = 1_100, CURRENT = 60_000, CLOSE = 60_000;
 const areas = new Map();
 
-let free = 0;                            // when the next request may go
-function turn() {
-  const wait = Math.max(0, free - Date.now());
-  free = Date.now() + wait + GAP;
-  return new Promise(go => setTimeout(go, wait));
+const firsts = [], rest = [];             // the line: new places' first requests, in the order they came, then everyone else's
+let free = 0, ticking = false;
+const listened = area => area.waiting > 0 || Date.now() - area.asked <= CLOSE;   // someone waiting for an answer is listening
+function turn(area, first) {             // resolves true when it is this place's turn, false if nobody is listening there anymore
+  return new Promise(go => { (first ? firsts : rest).push({ area, go }); tick(); });
+}
+function tick() {
+  if (ticking || !(firsts.length || rest.length)) return;
+  ticking = true;
+  setTimeout(() => {
+    ticking = false;
+    if (Date.now() < free) return tick();                // told to wait in the meantime
+    const next = firsts.shift() || rest.shift();
+    if (!listened(next.area)) { next.go(false); return tick(); }   // skipped without using a turn
+    free = Date.now() + GAP; next.go(true); tick();
+  }, Math.max(0, free - Date.now()));
 }
 
 const pick = a => ({
@@ -26,15 +43,15 @@ async function planes(lat, lon) {
     .map(a => ({ ...pick(a), at: Date.now() - (a.seen_pos ?? 0) * 1000 }));
 }
 
-// Each answer is the whole sky, so it replaces the last one.
-function refresh(area, lat, lon) {
-  if (area.busy || Date.now() < area.next) return area.busy;
-  area.busy = turn().then(() => planes(lat, lon))
-    .then(list => { area.planes = list; area.heard = Date.now(); area.next = Date.now() + EVERY; },
+function refresh(area) {
+  if (area.busy || (area.sky && !area.failing && Date.now() < area.next)) return area.busy;
+  const first = !area.tried; area.tried = true;
+  area.busy = turn(area, first).then(go => go ? planes(area.lat, area.lon) : Promise.reject(Object.assign(new Error('nobody listening'), { left: true })))
+    .then(list => { area.sky = list; area.heard = Date.now(); area.failing = false; area.next = Date.now() + EVERY; },
       e => {
-        const wait = Math.max(RETRY, e.wait || 0);
-        area.next = Date.now() + wait;
-        if (e.wait) free = Math.max(free, area.next);        // told to wait, and that holds for every place
+        if (e.left) throw e;
+        area.failing = true;
+        if (e.wait) free = Math.max(free, Date.now() + e.wait);   // told to wait, and that holds for every place
         console.log('adsb.fi', area.id, 'failed:', e.message);
         throw e;
       })
@@ -43,13 +60,18 @@ function refresh(area, lat, lon) {
   return area.busy;
 }
 
-// Visitors under the same patch of sky share one set of requests.
+// Visitors under the same patch of sky share one place. It is asked from where its first visitor is,
+// which is usually where everyone in that city is, since locations from a connection are a city's middle.
 async function sky(lat, lon) {
-  const id = `${Math.round(lat * 4) / 4},${Math.round(lon * 4) / 4}`;
-  if (!areas.has(id)) areas.set(id, { id, planes: [], heard: 0, next: 0, busy: null });
-  const area = areas.get(id), job = refresh(area, lat, lon);
-  if (Date.now() - area.heard > FRESH && job) await job.catch(() => {});   // nothing fresh to give, so wait for the answer
-  return Date.now() - area.heard < FRESH ? area.planes : null;            // null: adsb.fi has not answered, which is not the same as an empty sky
+  const now = Date.now(), id = `${Math.round(lat * 4) / 4},${Math.round(lon * 4) / 4}`;
+  for (const [k, a] of areas) if (!a.busy && !listened(a)) areas.delete(k);   // nobody listening there anymore, and nothing waiting in line
+  if (!areas.has(id)) areas.set(id, { id, lat, lon, sky: null, heard: 0, failing: false, tried: false, waiting: 0, next: 0, busy: null, asked: now });
+  const area = areas.get(id), fresh = !area.tried;
+  area.asked = now;
+  const job = refresh(area);
+  if (fresh && job) { area.waiting++; await job.catch(() => {}); area.waiting--; }   // a newcomer is first in line, so wait for its answer
+  if (!area.sky || (area.failing && Date.now() - area.heard > CURRENT)) return null;   // no sky to give, which is not the same as an empty sky
+  return area.sky;
 }
 
 export default async function handler(req, res) {
